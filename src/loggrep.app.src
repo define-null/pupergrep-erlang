@@ -1,0 +1,13 @@
+%%% -*- mode: erlang -*-
+%%% $Id$
+%%%
+
+{application, loggrep,
+ [
+  {description, "Loggrep"},
+  {vsn, "0.0.1"},
+  {id, "Loggrep"},
+  {registered, [ ] },
+  {applications, [ kernel, stdlib ] }
+ ]
+}.

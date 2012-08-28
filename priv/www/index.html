@@ -138,14 +138,15 @@
                         </tbody>
                     </table>
                 </div>
-            </div>
+            </div> 
         </div>
 
         <script type="text/javascript" src="/js/jquery.js"></script>
         <script type="text/javascript" src="/js/jquery.textext.js"></script>
-        <script type="text/javascript" src="/socket.io/socket.io.js"></script>
+        <script type="text/javascript" src="/js/multiplex.js"></script>
+        <script type="text/javascript" src="http://cdn.sockjs.org/sockjs-0.2.min.js"></script>
         <script type="text/javascript">
-            jQuery(document).ready(function() {
+             jQuery(document).ready(function() {
                 var logLinesTable     = jQuery("#log-lines"),
                     logsListContainer = jQuery("#logs-list"),
                     logsList          = jQuery(),
@@ -167,6 +168,10 @@
                     bufferLength      = 20,
                     outputPaused      = false,
                     linkSeparator     = '!!!';
+
+//                 jQuery.fn.outer = function() {
+//                     return $( $('<div></div>').html(this.clone()) ).html();
+//                 }
 
                 pauseButton.click(function() {
                     var pauseIcon = jQuery("#pause-icon"),
@@ -310,6 +315,13 @@
                     rebuildCurrentLink();
                 });
 
+                var sockjs_url = '/multiplex';
+                var sockjs = new SockJS(sockjs_url);
+                var multiplexer = new MultiplexedWebSocket(sockjs);
+
+                var logsChannel  = multiplexer.channel('logs');
+                var subscrChannel = multiplexer.channel('subscribe');
+
                 logsListContainer.delegate("li.log", "click", function() {
                     var element = jQuery(this);
 
@@ -319,9 +331,9 @@
                     logsListContainer.children("li.log").removeClass("active");
 
                     element.addClass("active");
-                    socket.emit("subscribe", {
-                        name: element.data("log-name")
-                    });
+
+                    MSG = JSON.stringify({name: element.data("log-name")});
+                    subscrChannel.send(MSG);
 
                     currentLog     = element.data("log-name");
                     currentLogType = element.data("log-type");
@@ -383,12 +395,11 @@
                     }
                 })();
 
-                var socket = io.connect(document.location.hostname, {
-                    "transports"      : ['websocket', 'xhr-polling'], // bad, bad nginx!
-                    "connect timeout" : 2000 // timeout for switching from websocket to xhr-polling
-                });
+                subscrChannel.onopen = function() {};
+                subscrChannel.onclose = function() {};
 
-                socket.on("logs", function(data) {
+                logsChannel.onmessage = function(e) {
+                    var data = jQuery.parseJSON(e.data);
                     var selectLog;
 
                     logsListContainer.children(".log").remove();
@@ -421,7 +432,7 @@
                     logNameFilter.change();
 
                     rebuildCurrentLink();
-                });
+                };
 
                 function addLogLine(text, isRaw) {
                     var logHeart = activeLogHeart,
@@ -515,20 +526,20 @@
                     return isAcceptedByConditionsJoinType(text, conditions, type);
                 }
 
-                socket.on("line", function(data) {
+                subscrChannel.onmessage = function(e) {
                     if (outputPaused) {
                         return;
                     }
-
+                    var data = jQuery.parseJSON(e.data);
                     addLogLine(data.line);
-                });
+                };
 
-                socket.on("disconnect", function() {
+                logsChannel.onclose = function() {
                     connected = false;
 
                     healthIcon.removeClass("icon-ok-circle")
-                              .addClass("icon-ban-circle")
-                              .prop("title", "Connection failed");
+                        .addClass("icon-ban-circle")
+                        .prop("title", "Connection failed");
 
                     (function animateDisconnect() {
                         healthIcon.fadeOut("slow", function() {
@@ -539,21 +550,21 @@
                             });
                         });
                     })();
+                    
+                };
 
-                });
-
-                socket.on("connect", function() {
+                logsChannel.onopen = function() {
                     connected = true;
-
+                    
                     if (healthIconTimer) {
                         clearTimeout(healthIconTimer);
                         healthIconTimer = undefined;
                     }
-
+                    
                     healthIcon.removeClass("icon-ban-circle")
-                              .addClass("icon-ok-circle")
-                              .prop("title", "Connected");
-                });
+                        .addClass("icon-ok-circle")
+                        .prop("title", "Connected");
+                };
 
                 window.scrollTo(0, 1);
             });
