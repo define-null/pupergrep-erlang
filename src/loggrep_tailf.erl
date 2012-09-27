@@ -40,13 +40,18 @@ handle_call({subscribe, Id, Name, Callback}, _From, #state{ets=Tid} = State) ->
     case gproc:lookup_local_name(Name) of
         undefined ->
             Files = loggrep_conf:log_files(Name),
-            loggrep_tailf_sup:start_tailf_worker(Name, Files);
+            loggrep_tailf_sup:start_tailf_worker(Name, Files),
+            loggrep_tailf_worker:pub(Name, Id);        
         _ ->
             ok
     end,
     true = ets:insert(Tid, {{Id, Name}, Callback}),
     {reply, ok, State};
 handle_call({unsubscribe, Id}, _From, #state{ets=Tid} = State) ->
+
+    %% вытащить все запущенные процессы tailf
+    %% на них всех убрать себя из списка пользователей
+    
     Names = lists:append(ets:match(Tid, {{Id, '$1'}, '_'})),
     %%[ loggrep_tailf_worker:unpub(Name, Id) || Name <- Names ],
     {reply, ok, State}.
@@ -63,14 +68,16 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-
-
 %%%===================================================================
-%%% Internal functions
+%%% Tailf notification api
 %%%===================================================================
 
+%% @doc Should be called by workers to notify about tailf exit
+-spec worker_exit(string(), any()) -> ok.
 worker_exit(Name, Args) ->
     io:format("Worker ~s exit: ~w~n", [Name, Args]).
 
+%% @doc Should be called to send messages to the clients from tailf procs.
+-spec worker_send(string(), binary()) -> ok.
 worker_send(Name, Data) ->
     io:format("Worker ~s send: ~n~s~n", [Name, Data]).    

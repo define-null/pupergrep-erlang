@@ -4,7 +4,6 @@
 %% Description : 
 
 -module(loggrep_sup).
-
 -behaviour(supervisor).
 
 %% API
@@ -13,6 +12,7 @@
 
 -define(SERVER, ?MODULE).
 -define(CHILD_LINK(Mod, Type), {Mod, {Mod, start_link, []}, permanent, 2000, Type, [Mod]}).
+-define(CHILD_LINK2(Mod, Type), {Mod, {Mod, start_link, []}, permanent, infinity, Type, [Mod]}).
 
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
@@ -22,6 +22,6 @@ init([]) ->
     {ok, {SupFlags, [
                      ?CHILD_LINK(loggrep_conf, worker),
                      ?CHILD_LINK(loggrep_tailf, worker),
-                     ?CHILD_LINK(loggrep_tailf_sup, supervisor)
+                     ?CHILD_LINK2(loggref_tailf_sup, supervisor)
                     ]}}.
 

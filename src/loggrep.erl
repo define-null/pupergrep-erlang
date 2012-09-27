@@ -1,22 +1,26 @@
 %%#!/usr/bin/env escript
 %%! -smp disable +A1 +K true -pa ebin deps/sockjs/ebin deps/cowboy/ebin deps/mimetypes/ebin deps/jsx/ebin -input
 -module(loggrep).
--mode(compile).
+-behaviour(application).
 
--export([main/1,
-         send_message/3
+-export([start/2,
+         stop/1
+        ]).
+-export([
+         service_logs/3,
+         service_subscribtion/3,
+         service_subscribtion_send/3
         ]).
 
-main(_) ->
+start(_StartType, _StartArgs) ->
     Port = 8081,
     application:start(sockjs),
     application:start(cowboy),
     application:start(gproc),
 
-    MultiplexState = sockjs_multiplex:init_state(
-                       [{"logs",      fun service_logs/3,  []},
-                        {"subscribe", fun service_subscribtion/3,  []}
-                       ]),
+    MultiplexState = sockjs_multiplex:init_state( [{"logs",      fun service_logs/3,  []},
+                                                   {"subscribe", fun service_subscribtion/3,  []}
+                                                  ]),
 
     SockjsState = sockjs_handler:init_state(<<"/multiplex">>, sockjs_multiplex, MultiplexState, []),
 
@@ -37,10 +41,11 @@ main(_) ->
     cowboy:start_listener(http, 100,
                           cowboy_tcp_transport, [{port,     Port}],
                           cowboy_http_protocol, [{dispatch, Routes}]),
-    receive
-        _ ->
-            ok
-    end.
+    loggrep_sup:start_link().
+    
+
+stop(_State) ->
+    ok.
 
 %% --------------------------------------------------------------------------
 
@@ -51,7 +56,6 @@ service_logs(Conn, init, State) ->
     %%                 {"name":"unfollowr access_log"},
     %%                 {"name":"uptime (fast)"}]}]
     %% }
-    
     Logs = loggrep_conf:logs(), 
     Data = [{logs,
              [[{name, erlang:list_to_binary(X)}] || X <- Logs]
@@ -63,25 +67,38 @@ service_logs(_Conn, {recv, _Data}, State) ->
 service_logs(_Conn, closed, State) ->
     {ok, State}.
 
-service_subscribtion(_Conn, init, State) ->
-    {ok, State};
+service_subscribtion(Conn, init, State) ->
+    Sub = loggrep_subs:add_client(Conn),
+    {ok, [{sub, Sub} | State]};
 service_subscribtion(Conn, {recv, Data}, State) ->
+    case get_log_name(Data) of
+        {ok, Filename} ->
+            Sub = proplists:get_value(sub, State),
+            loggrep_subs:sub(Sub, Filename, fun(Fname, Msg) ->
+                                                    service_subscribtion_send(Conn, Fname, Msg)
+                                            end),
+            {ok, State};
+        {error, _Error} ->
+            {ok, State}
+    end;
+service_subscribtion(_Conn, closed, State) ->
+    Sub = proplists:get_value(sub, State),
+    loggrep_subs:delete_client(Sub),
+    {ok, State}.
+
+service_subscribtion_send(Conn, _Filename, _Msg) ->
+    Conn:send("{\"line\" : \"some string\"}").
+
+%% --------------------------------------------------------------------------
+
+%% @doc Gets log name from json
+get_log_name(Data) ->
     Js = list_to_binary(Data),
     case jsx:is_json(Js) of
         true ->
             [{<<"name">>, Filename}] = jsx:decode(Js),
-            io:format("Filename: ~p~n", [binary_to_list(Filename)]),
-            loggrep_tailf:unsubscribe(Conn),
-            loggrep_tailf:subscribe(Conn, Filename, fun(Name, Msg) ->
-                                                            send_message(Conn, Name, Msg)
-                                                    end );
+            {ok, Filename};
         false ->
-            ok
-    end,
-    {ok, State};
-service_subscribtion(Conn, closed, State) ->
-    loggrep_tailf:unsubscribe(Conn),
-    {ok, State}.
-
-send_message(Conn, _Filename, _Msg) ->
-    Conn:send("{\"line\" : \"some string\"}").
+            {error, not_json}
+    end.
+        

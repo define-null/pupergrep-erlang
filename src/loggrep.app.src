@@ -8,6 +8,7 @@
   {vsn, "0.0.1"},
   {id, "Loggrep"},
   {registered, [ ] },
-  {applications, [ kernel, stdlib ] }
+  {applications, [ kernel, stdlib ] },
+  {mod, {loggrep, []}}
  ]
 }.
