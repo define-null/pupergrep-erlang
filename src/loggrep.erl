@@ -1,5 +1,3 @@
-%%#!/usr/bin/env escript
-%%! -smp disable +A1 +K true -pa ebin deps/sockjs/ebin deps/cowboy/ebin deps/mimetypes/ebin deps/jsx/ebin -input
 -module(loggrep).
 -behaviour(application).
 
