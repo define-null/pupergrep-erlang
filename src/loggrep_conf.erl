@@ -31,7 +31,7 @@ log_files(Name) ->
 init([]) ->
     Conf = read_config(?CONF_NAME),
     Logs = proplists:get_value(logs, Conf, []),
-    LogsPrepared = [{Name, prepare_log(File)} || {Name, File} <- Logs],
+    LogsPrepared = [{erlang:list_to_binary(Name), prepare_log(File)} || {Name, File} <- Logs],
     {ok, #state{ logs = LogsPrepared}}.
 
 handle_call(logs, _From, #state{logs = Logs} = State) ->
@@ -52,7 +52,8 @@ handle_call({log_files, Name}, _From, #state{logs = Logs} = State) ->
                          case filelib:is_dir(File) of
                              true ->
                                  {ok, Files} = file:list_dir(File),
-                                 [F || F <- Files, filelib:is_regular(filename:join(File, F))];
+                                 [filename:join(File, F) || F <- Files,
+                                                            filelib:is_regular(filename:join(File, F))];
                              false ->
                                  case filelib:wildcard(File) of
                                      [] ->

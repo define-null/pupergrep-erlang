@@ -19,9 +19,9 @@ start_link() ->
 
 init([]) ->
     SupFlags = {one_for_one, 1000, 3600},
-    {ok, {SupFlags, [
-                     ?CHILD_LINK(loggrep_conf, worker),
+    {ok, {SupFlags, [?CHILD_LINK(loggrep_conf, worker),
                      ?CHILD_LINK(loggrep_tailf, worker),
-                     ?CHILD_LINK2(loggref_tailf_sup, supervisor)
+                     ?CHILD_LINK2(loggrep_tailf_sup, supervisor),
+                     ?CHILD_LINK2(loggrep_clients_sup, supervisor)
                     ]}}.
 

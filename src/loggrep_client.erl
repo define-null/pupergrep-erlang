@@ -21,51 +21,66 @@
 
 -define(SERVER, ?MODULE). 
 
--record(state, {conn,
-                logs}).
+-record(state, {conn, logs = dict:new()}).
+
+%%------------------------------------------------------------------------------
+%% Api
+%%------------------------------------------------------------------------------
 
 start_link(Conn) ->
-    gen_server:start_link(?MODULE, [[Conn]], []).
+    gen_server:start_link(?MODULE, [Conn], []).
 
+-spec subscribe(pid(), any(), fun()) -> ok | {error, any()}.
 subscribe(ClientServer, LogSender, Handler) ->
     gen_server:call(ClientServer, {sub, LogSender, Handler}).
 
+-spec unsubscribe(pid(), any()) -> ok.
 unsubscribe(ClientServer, LogSender) ->
     gen_server:call(ClientServer, {unsub, LogSender}).
 
+-spec stop(pid()) -> ok.
 stop(ClientServer) ->
     gen_server:cast(ClientServer, stop).
 
+%%------------------------------------------------------------------------------
+%% GenserverApi
+%%------------------------------------------------------------------------------
+
 init([Conn]) ->
-    process_flag(trap_exit, true),
-    {ok, #state{conn = Conn,
-                logs = etc:new(logs, [set])
-               }}.
+    {ok, #state{conn = Conn, logs = dict:new()}}.
 
-handle_call({sub, LogName, Handler}, From, State) ->
-    monitor_log(LogName, Handler, State);       
-
-handle_call({unsub, LogName}, From, State) ->
-    demonitor_log(LogName, State);
-
+handle_call({sub, LogName, Handler}, _From, State) ->
+    {Response, State1} = sub_impl(LogName, Handler, State),
+    {reply, Response, State1};
+handle_call({unsub, LogName}, _From, State) ->
+    {reply, ok, unsub_impl(LogName, State)};
 handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+    {reply, ok, State}.
 
 handle_cast(stop, State) ->
     {stop, normal, State};
-
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({LogName, NewChunk}, State) ->
-    notify_client_log_new_chunk(LogName, NewChunk, State);
-
-handle_info({'DOWN', MonRef, process, _Pid, Info}, State) ->
-    notify_client_log_down(MonRef, Info, State);
-
+handle_info({gproc_ps_event, {tailf_event, Filename}, Msg}, #state{conn = Conn, logs = Dict} = State) ->
+    case dict:is_key(Filename, Dict) of
+        true ->
+            {Handler, _} = dict:fetch(Filename, Dict),
+            Handler(Conn, Filename, Msg);
+        false ->
+            ok
+    end,
+    {noreply, State};
+handle_info({'DOWN', MonitorRef, process, _Object, _Info}, #state{logs = Dict} = State) ->
+    case find_log_mon(MonitorRef, Dict) of
+        undefined ->
+            {noreply, State};
+        {LogName, Handler} ->
+            {ok, State1} = sub_impl(LogName, Handler, State#state{logs = dict:erase(LogName, Dict)}),
+            {noreply, State1}
+    end;
 handle_info(_Info, State) ->
-    {noreply, State}.
+    {noreply, State}. 
 
 terminate(_Reason, #state{conn = Conn}) ->
     Conn:close(),
@@ -74,36 +89,38 @@ terminate(_Reason, #state{conn = Conn}) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-monitor_log(LogName, Handler, #state{logs = Logs} = State) ->
-    Pid = loggrep_tailf:subscribe(self(), LogName),
-    MonRef = erlang:monitor(process, Pid),
-    {reply, ok, State}.
+%%------------------------------------------------------------------------------
+%%
+%%------------------------------------------------------------------------------
 
-demonitor_log(LogName, #state{logs = Logs} = State) ->
-    MonRef = found_monref(LogName, Logs),
-    true = erlang:demonitor(MonRef),
-    ok = loggrep_tailf:unsubscribe(self(), LogName),
-    %%remove_log(LogName),    
-    {reply, ok, State}.   
+sub_impl(LogName, Handler, #state{logs = Dict} = State) ->
+    case dict:is_key(LogName, Dict) of
+        true ->
+            {ok, State};
+        false ->
+            case loggrep_tailf:subscribe(LogName, self()) of
+                {ok, Pid} ->
+                    Monref = erlang:monitor(process, Pid),
+                    {ok, State#state{logs = dict:store(LogName, {Handler, Monref}, Dict)}};
+                {error, Reason} ->
+                    {{error, Reason}, State}
+            end
+    end.
 
-notify_client_log_new_chunk(LogName, NewChunk, #state{conn = Conn, logs = Logs} = State) ->
-    Handler = found_handler(LogName, Logs),
-    Handler(Conn, LogName, {new_chunk, NewChunk}),
-    State1 = State,
-    {noreply, State1}.
+unsub_impl(LogName, #state{logs = Dict} = State) ->
+    case dict:is_key(LogName, Dict) of
+        false ->
+            State;
+        true ->
+            {_,MonRef} = dict:fetch(LogName, Dict),
+            true = erlang:demonitor(MonRef),
+            ok = loggrep_tailf:unsubscribe(LogName, self()),
+            State#state{logs = dict:erase(LogName, Dict)}
+    end.
 
-notify_client_log_down(MonRef, Info, #state{conn = Conn, logs = Logs} = State) ->
-    Handler = found_handler(MonRef, Logs),
-    LogName = found_logname(MonRef, Logs),
-    Handler(Conn, LogName, log_down),
-    State1 = State,
-    {noreply, State1}.
-
-found_monref(LogName, Logs) ->
-    ok.
-found_handler(MonRef, Logs) when is_reference(MonRef) ->
-    ok;
-found_handler(LogName, Logs) ->
-    ok.
-found_logname(MonRef, Logs) when is_reference(MonRef) ->
-    ok.
+find_log_mon(MonitorRef, Logs) ->
+    dict:fold(fun(LogName, {Handler, MonRef}, _) when MonRef =:= MonitorRef ->
+                      {LogName, Handler};
+                 (_,_,Acc) ->
+                      Acc
+              end, undefined, Logs).
